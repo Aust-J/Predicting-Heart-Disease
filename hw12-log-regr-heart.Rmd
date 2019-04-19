@@ -1,0 +1,331 @@
+---
+title: "Logistic Regression to Find Contributing Factors to Heart Disease"
+author: "Setsuka Aust"
+date: "4/11/2019"
+output: html_document
+---
+
+```{r}
+install.packages("pROC")
+library(pROC)
+
+install.packages("PRROC")
+library(PRROC)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Reading and preprocessing the data set
+
+The dataset obtained is of heart disease patients. The variable of interest, "output", indicates whether a patient has heart disease. The dataset contains several relevant variables that are known indicators of heart disease. 
+
+The dataset was processed in a similar manner to the example provided.
+
+```{r}
+heart = read.table("https://raw.githubusercontent.com/grbruns/cst383/master/heart.dat", quote = "/")
+names(heart) <- c("AGE", "SEX", "CHESTPAIN", "RESTBP", "CHOL",
+                   "SUGAR", "ECG", "MAXHR", "ANGINA", "DEP", "EXERCISE", "FLUOR",
+                   "THAL", "OUTPUT")
+ names(heart) = tolower(names(heart))
+
+ heart$output = heart$output - 1  
+ 
+
+ heart$sex = factor(heart$sex)
+ heart$sugar = factor(heart$sugar)
+ heart$angina = factor(heart$angina)
+ heart$chestpain = factor(heart$chestpain)
+ heart$ecg = factor(heart$ecg)
+ heart$thal = factor(heart$thal)
+ heart$exercise = factor(heart$exercise)
+ 
+ rv = c("age", "restbp", "chol", "maxhr", "dep")
+```
+
+##Data exploration
+
+We are interested in understanding aspects of the dataset. This exploration will aid in our formation of a logistic regression model. 
+
+```{r}
+attach(heart)
+str(heart)
+head(heart)
+```
+
+
+
+```{r}
+summary(heart)
+```
+
+From the summary of the data, it is interesting to note the uneven distribution in some of the categorical variables. These include "sex", a high amount of "chest pain" in level 4 category, only 2 "ECG" of level 1, and "thal". Having a smaller sample space in some of these categories could negatively skew interpretations. 
+
+```{r}
+par(mfrow=c(2,2))
+barplot(c(87,183), names.arg = c("female", "male") , col = 'chartreuse', main = "Histogram of Participant's Sex")
+hist(heart$age, col = 'chartreuse')
+hist(heart$restbp, col = 'chartreuse' )
+hist(heart$chol, col = 'chartreuse')
+```
+
+
+
+```{r}
+pairs(heart[,rv])
+cor(heart[,rv])
+```
+From the scatter plots and correlation matrix, it appears only the variables "age" and "maxhr" have moderate correlation. 
+
+Issues arising from co-linear variables in our model appear to not be of a concern. VIF testing can also prove this to be true. 
+
+```{r}
+
+plot(restbp~chol, col = c('blue' , 'red'), xlim = c(100,500), pch = 16, main = "Heart Disease, Plotted by Cholesterol and Blood Pressure")
+legend("topleft", legend=c("no heart disease", "heart disease"), pch=16, col=c('blue', 'red'))
+```
+
+This plot suggests that, based on this sample, there is a moderate relationship between heart disease and the two predictors: cholesterol and resting blood pressure.
+
+##Building a logistic regression model
+
+```{r}
+source("https://raw.githubusercontent.com/grbruns/cst383/master/lin-regr-util.R")
+ 
+ set.seed(1)
+
+ splits = split_data(heart, frac=c(3,1))
+ tr_dat = splits[[1]]
+ te_dat = splits[[2]]
+
+```
+
+
+```{r}
+fit1 = glm(output ~ chol + restbp + age + exercise , data=tr_dat, family=binomial)
+```
+
+
+Based on existing research (http://time.com/3712478/predict-heart-attack-risk/), significant predictors of heart disease are supposedly Cholesterol and Blood Pressure. For this reason, those shall be included in the model. Considerations into inclusion of variables "angina" and "chestpain" were made, but since early risk detection of heart disease is a more desireable result, and chest pains usually are immediate precursors of heart disease, they were not included in this first model.
+
+
+```{r}
+summary(fit1)
+```
+
+Surprisingly, both "chol" and "restbp" are not signficant predictors of heart disease, given the other variables in the model. 
+
+
+##Classifying test data
+
+Using our trained model on test data, we will assess the accuracy of the model. 
+
+```{r}
+y = predict(fit1, newdata=te_dat, type="response")
+predicts = as.numeric(y > 0.5)
+actuals = te_dat$output
+conf_mtx = table(predicts, actuals)
+conf_mtx
+(conf_mtx[1,1] + conf_mtx[2,2])/length(y)
+
+```
+
+Our model has achieved .65 percent accuracy, given a .5 classification threshold. 
+
+If the threshold is changed to .6, we obtain better accuracy. This may suggest that classification in logisitic regression models may need to be more conservative in heart disease prediction. Though, it is likely not generalizable and can only find significance based on this model and sample size. Further analysis would be required.
+
+```{r}
+y = predict(fit1, newdata=te_dat, type="response")
+predicts = as.numeric(y > 0.6)
+actuals = te_dat$output
+conf_mtx = table(predicts, actuals)
+conf_mtx
+(conf_mtx[1,1] + conf_mtx[2,2])/length(y)
+```
+
+##Assessing the Model
+
+Currently the model predicts a moderate amount of heart disease patients correctly. 
+
+
+```{r}
+plot(density(y[actuals == 1]), ylim = c(0,2), col = 'red', main = "Output of Classifier")
+lines(density(y[actuals == 0]))
+legend("topleft", legend=c("no heart disease", "heart disease"), pch=15, col=c('black', 'red'))
+```
+
+```{r}
+plot(roc(actuals~y))
+auc(roc(actuals~y))
+```
+
+Based on the ROC plot and AUC, we have obtained a classifier that has a probability of correctly predicting heart disease of .67
+
+```{r}
+prec_recall_summary = function(predicts, actuals) {
+   thresh = seq(0, 1, length.out=50)
+   prec_rec = data.frame()
+   actuals = factor(as.numeric(actuals))
+   for (th in thresh) {
+     predicts = factor(as.numeric(y >= th), levels=c("0","1"))
+     prec_rec = rbind(prec_rec, as.vector(table(predicts, actuals)))
+   }
+   names(prec_rec) = c("TN", "FP", "FN", "TP")
+   prec_rec$threshold = thresh
+  prec_rec$precision = prec_rec$TP/(prec_rec$TP + prec_rec$FP)
+   prec_rec$recall    = prec_rec$TP/(prec_rec$TP + prec_rec$FN)
+   prec_rec$false_pos = prec_rec$FP/(prec_rec$FP + prec_rec$TN)
+   return(prec_rec)
+}
+
+pr1 = prec_recall_summary(predicts, actuals)
+attach(pr1) 
+plot(precision~threshold, type = 'l')
+plot(recall~threshold, type = 'l')
+
+
+```
+
+```{r}
+plot(pr.curve(predicts, actuals, curve = TRUE))
+```
+
+##Model 2
+
+The initial model is a useful staring point, though it could be useful to use automated techniques to try to arrive at a stronger model.
+
+Variable/model selection can be used to obtain potentially stronger models.
+
+The following models will be obtained using backwards and forward elimination, respectively. The base model's predictor variable was determined based on the significance of the "fluor" variable in the full model.
+
+```{r}
+
+full = glm(output~.,  data=tr_dat, family=binomial)
+summary(full)
+base = glm(output~fluor)
+```
+
+
+```{r}
+back.glm = step(full, scope = list(lower=~1, upper = full), direction = "backward", trace = FALSE)
+
+summary(back.glm)
+```
+
+
+```{r}
+y2 = predict(back.glm, newdata=te_dat, type="response")
+predicts2 = as.numeric(y2 > 0.8)
+actuals = te_dat$output
+conf_mtx2 = table(predicts2, actuals)
+conf_mtx2
+(conf_mtx2[1,1] + conf_mtx2[2,2])/length(y2)
+```
+
+This model allows for a higher threshold tolerance, without sacrificing accuracy of predictions. This model would be useful if mitigation of false postitives were a concern.
+
+
+
+```{r}
+plot(density(y2[actuals == 1]), ylim = c(0,2), col = 'red', main = "Output of Classifier")
+lines(density(y2[actuals == 0]))
+legend("topleft", legend=c("no heart disease", "heart disease"), pch=15, col=c('black', 'red'))
+```
+
+
+
+```{r}
+plot(roc(actuals~y2))
+auc(roc(actuals~y2))
+```
+
+Based on the ROC plot and AUC, we have obtained a classifier that has a probability of correctly predicting heart disease of .88. This indicates a stronger model.
+
+```{r}
+pr2 = prec_recall_summary(predicts2, actuals)
+plot(precision~threshold, data = pr2, type = 'l')
+plot(recall~threshold, data = pr2, type = 'l')
+```
+
+```{r}
+plot(pr.curve(predicts2, actuals, curve = TRUE))
+```
+
+The interpretation of this PR curve is that there is little trade off for precision, over recall.
+
+##Model 3
+
+```{r}
+forward.glm = step(base, scope = list(lower=~1, upper = full), direction = "forward", trace = FALSE)
+summary(forward.glm)
+```
+
+
+```{r}
+y3 = predict(forward.glm, newdata=te_dat, type="response")
+predicts3 = as.numeric(y3 > 0.5)
+actuals = te_dat$output
+conf_mtx3 = table(predicts3, actuals)
+conf_mtx3
+(conf_mtx3[1,1] + conf_mtx3[2,2])/length(y3)
+```
+
+```{r}
+plot(density(y3[actuals == 1]), ylim = c(0,2), col = 'red', main = "Output of Classifier")
+lines(density(y3[actuals == 0]))
+legend("topleft", legend=c("no heart disease", "heart disease"), pch=15, col=c('black', 'red'))
+```
+
+
+
+```{r}
+plot(roc(actuals~y3))
+auc(roc(actuals~y3))
+```
+
+Based on the ROC plot and AUC, we have obtained a classifier that has a probability of correctly predicting heart disease of .95.
+
+```{r}
+pr3 = prec_recall_summary(predicts3, actuals)
+plot(precision~threshold, data = pr3, type = 'l')
+plot(recall~threshold, data = pr3, type = 'l')
+```
+
+
+```{r}
+plot(pr.curve(predicts3, actuals, curve = TRUE))
+```
+
+
+This PR curve has similar interpretations as previous ones.
+
+##Conclusions
+Of the three logistic regression models, the first is the least useful, but also requires much less information about a participant. With this less complex model, we achieve less accuracy in our predictions. Overall, the third model provides the most accurate predictions, while simultatenously avoiding false positive and false negatives. Depending on the application, different diagnostic methods may need to be considered. The Third model would require a fluoroscopy and ECG, which could be expensive for insurance companies.   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
